@@ -1,3 +1,4 @@
+'''
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,7 +9,6 @@ st.set_page_config(
     page_title="Aadhaar Dashboard",
     layout="wide"
 )
-
 # ---------- LOAD DATA ----------
 df = pd.read_csv("enrolment_full1.csv")
 df['date'] = pd.to_datetime(df['date'], format='%d-%m-%Y')
@@ -234,7 +234,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-'''
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -428,3 +428,238 @@ else:
 # ---------- FOOTER ----------
 st.markdown("<hr><p style='text-align:center;color:gray;'>UIDAI Hackathon Project • Team Submission</p>", unsafe_allow_html=True)
 '''
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+
+# -----------------------------------------------------------------------------
+# 1. PAGE SETUP
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="ASIP Dashboard", layout="wide", page_icon="🇮🇳")
+
+st.title("🇮🇳 Aadhaar Service Intelligence Platform (ASIP)")
+st.markdown("### Operational Intelligence for UIDAI Enrolment & Update Centers")
+st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# 2. LOAD DATA
+# -----------------------------------------------------------------------------
+@st.cache_data
+def load_data():
+    try:
+        # Load the Master Dataset created in Step 3
+        df = pd.read_csv('aadhaar_master.csv')
+        # .dt.date removes the time component (00:00:00)
+        df['date'] = pd.to_datetime(df['date']).dt.date  
+        return df
+    except FileNotFoundError:
+        return None
+
+df = load_data()
+
+if df is None:
+    st.error("❌ Critical Error: 'aadhaar_master.csv' not found. Please run the Data Processing Notebook first!")
+    st.stop()
+
+# -----------------------------------------------------------------------------
+# 3. SIDEBAR FILTERS
+# -----------------------------------------------------------------------------
+st.sidebar.header("🔍 Filter Data")
+
+# State Filter
+state_list = ["All"] + sorted(list(df['state'].unique()))
+selected_state = st.sidebar.selectbox("Select State", state_list)
+
+if selected_state != "All":
+    df_filtered = df[df['state'] == selected_state]
+    # District Filter (Only shows districts in selected state)
+    district_list = ["All"] + sorted(list(df_filtered['district'].unique()))
+    selected_district = st.sidebar.selectbox("Select District", district_list)
+    
+    if selected_district != "All":
+        df_filtered = df_filtered[df_filtered['district'] == selected_district]
+else:
+    df_filtered = df
+
+st.sidebar.markdown("---")
+st.sidebar.info(f"**Data Loaded:** {len(df_filtered):,} rows")
+
+# -----------------------------------------------------------------------------
+# 4. KPI METRICS (Top Row)
+# -----------------------------------------------------------------------------
+col1, col2, col3, col4 = st.columns(4)
+
+total_enrol = df_filtered['Total_Enrolments'].sum()
+total_updates = df_filtered['Total_Updates'].sum()
+avg_ausi = df_filtered['AUSI'].mean()
+# Calculate % Biometric (Insightful Metric)
+bio_updates = df_filtered['bio_age_5_17'].sum() + df_filtered['bio_age_17_'].sum()
+bio_pct = (bio_updates / total_updates * 100) if total_updates > 0 else 0
+
+col1.metric("Total Enrolments (New)", f"{total_enrol:,.0f}")
+col2.metric("Total Updates (Changes)", f"{total_updates:,.0f}")
+col3.metric("Avg Stress Index (AUSI)", f"{avg_ausi:.2f}", help="Updates divided by Enrolments. Higher = More Pressure.")
+col4.metric("Biometric Share", f"{bio_pct:.1f}%", help="Percentage of updates that are Biometric")
+
+# -----------------------------------------------------------------------------
+# 5. MAIN ANALYSIS TABS
+# -----------------------------------------------------------------------------
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Trend Explorer", "🚨 Stress Index (AUSI)", "⚠️ Anomaly Detector", "📢 Action Center", "🔮 Demand Forecast"])
+
+# --- TAB 1: TRENDS (The Split View) ---
+with tab1:
+    st.subheader("Daily Transaction Trends (Split View)")
+    st.write("Breakdown of Workload: New Enrolments vs. Demographic Updates vs. Biometric Updates.")
+    
+    # Aggregate by date
+    trend_data = df_filtered.groupby('date').agg({
+        'Total_Enrolments': 'sum',
+        'demo_age_5_17': 'sum',
+        'demo_age_17_': 'sum',
+        'bio_age_5_17': 'sum',
+        'bio_age_17_': 'sum'
+    }).reset_index()
+
+    # Create explicit columns for the graph
+    trend_data['Demographic Updates'] = trend_data['demo_age_5_17'] + trend_data['demo_age_17_']
+    trend_data['Biometric Updates'] = trend_data['bio_age_5_17'] + trend_data['bio_age_17_']
+
+    # Plot
+    fig_trend = px.line(trend_data, x='date', 
+                        y=['Total_Enrolments', 'Demographic Updates', 'Biometric Updates'],
+                        title="Workload Volume Over Time",
+                        color_discrete_map={
+                            "Total_Enrolments": "green", 
+                            "Demographic Updates": "blue", 
+                            "Biometric Updates": "orange"
+                        },
+                        markers=True)
+    
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+# --- TAB 2: AUSI (Stress Index) ---
+with tab2:
+    st.subheader("📍 District Stress Heatmap")
+    st.write("Which districts are spending more time on Updates than new Enrolments?")
+    
+    # Group by District
+    district_stats = df_filtered.groupby('district').agg({
+        'Total_Enrolments': 'sum',
+        'Total_Updates': 'sum',
+        'AUSI': 'mean' # Average daily stress
+    }).reset_index()
+    
+    # Sort by Stress
+    top_stressed = district_stats.sort_values(by='AUSI', ascending=False).head(15)
+    
+    fig_bar = px.bar(top_stressed, x='district', y='AUSI',
+                     color='AUSI', title="Top 15 High-Stress Districts",
+                     color_continuous_scale='Reds',
+                     text_auto='.1f')
+    
+    st.plotly_chart(fig_bar, use_container_width=True)
+    
+    st.info("💡 **Insight:** High AUSI (> 5.0) indicates the center is overwhelmed by maintenance/update work rather than onboarding new citizens.")
+
+# --- REPLACEMENT FOR TAB 3 (ANOMALY DETECTOR) ---
+with tab3:
+    st.subheader("🔍 Operational Anomalies")
+    st.write("Detecting unusual spikes in activity (Potential Fraud or Migration Events).")
+    
+    # 1. Calculate Statistics
+    avg_updates = df_filtered['Total_Updates'].mean()
+    threshold = df_filtered['Total_Updates'].quantile(0.95)
+    
+    # 2. Filter Anomalies
+    anomalies = df_filtered[df_filtered['Total_Updates'] > threshold].copy()
+    anomalies = anomalies.sort_values(by='Total_Updates', ascending=False)
+    
+    # 3. ADD THE "WHY" (Reasoning Column)
+    # This calculates how many times higher than average the volume is (e.g., "3.5x Normal")
+    anomalies['Severity'] = anomalies['Total_Updates'] / avg_updates
+    anomalies['Reason'] = anomalies['Severity'].apply(lambda x: f"Volume is {x:.1f}x higher than average")
+
+    # Metrics
+    col_m1, col_m2 = st.columns(2)
+    col_m1.metric("Typical Daily Volume", f"{avg_updates:,.0f}")
+    col_m2.metric("Anomaly Threshold (95%)", f"{threshold:,.0f}")
+    
+    if not anomalies.empty:
+        st.warning(f"⚠️ Found {len(anomalies)} suspicious high-activity days.")
+        # Show the new 'Reason' column so the user understands WHY it's an anomaly
+        st.dataframe(anomalies[['date', 'district', 'Total_Updates', 'Reason']].head(15), use_container_width=True)
+    else:
+        st.success("✅ No anomalies detected. Operations are stable.")
+
+# --- TAB 4: ACTION CENTER (RECOMMENDATIONS) ---
+with tab4:
+    st.subheader("🚀 Recommended Actions")
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.markdown("### 📡 Mobile Unit Deployment")
+        st.write("Districts with **High Stress (AUSI > 10)** need mobile units to clear the update backlog.")
+        
+        # Logic: Find districts with high AUSI
+        high_stress = district_stats[district_stats['AUSI'] > 10]
+        
+        if not high_stress.empty:
+            for dist in high_stress['district'].head(5):
+                st.error(f"🚨 **Deploy Unit to:** {dist} (AUSI: {high_stress[high_stress['district']==dist]['AUSI'].values[0]:.1f})")
+        else:
+            st.success("No districts currently require emergency deployment.")
+
+    with col_b:
+        st.markdown("### 🔔 Biometric Update Reminders")
+        st.write("Based on Age 5-17 data, these districts need 'Mandatory Biometric Update' camps.")
+        
+        # Logic: Districts with high volume of bio updates pending (using proxy of high bio activity)
+        # We look for places with High Bio Updates
+        high_bio = district_stats.sort_values(by='Total_Updates', ascending=False).head(5)
+        
+        for dist in high_bio['district']:
+            st.info(f"📩 **Send SMS Blast in:** {dist}")
+
+    st.markdown("---")
+    st.caption("Generated by ASIP Intelligence Engine")
+
+# --- TAB 5: DEMAND FORECAST (The Missing Piece) ---
+with tab5:
+    st.subheader("🔮 Workload Forecast (Next 7 Days)")
+    st.write("Predicting upcoming volume to help with staff scheduling.")
+    
+    # 1. Prepare Data
+    # We use the last 30 days to calculate a rolling average
+    daily_counts = df_filtered.groupby('date')[['Total_Updates']].sum().reset_index()
+    daily_counts = daily_counts.sort_values('date')
+    
+    # Calculate 7-Day Moving Average
+    daily_counts['Moving_Avg'] = daily_counts['Total_Updates'].rolling(window=7).mean()
+    
+    # 2. "Predict" the next 7 days
+    last_avg_val = daily_counts['Moving_Avg'].iloc[-1]
+    last_date = daily_counts['date'].max()
+    
+    # Create future dates
+    future_dates = [last_date + pd.Timedelta(days=i) for i in range(1, 8)]
+    forecast_df = pd.DataFrame({
+        'date': future_dates,
+        'Predicted_Updates': [last_avg_val] * 7 # Simple baseline forecast
+    })
+    
+    # 3. Visuals
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        st.metric("Predicted Daily Load", f"{last_avg_val:,.0f} updates/day")
+    with col_f2:
+        st.info("Based on 7-Day Moving Average Trend")
+        
+    # Plot Historical vs Forecast
+    fig_forecast = px.line(daily_counts.tail(30), x='date', y='Total_Updates', title="Historical (Last 30 Days) vs Forecast")
+    fig_forecast.add_scatter(x=forecast_df['date'], y=forecast_df['Predicted_Updates'], mode='lines+markers', name='Forecast', line=dict(color='red', dash='dash'))
+    
+    st.plotly_chart(fig_forecast, use_container_width=True)
+
+# -----------------------------------------------------------------------------
